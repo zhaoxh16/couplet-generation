@@ -43,25 +43,25 @@ class Translator(nn.Module):
     def _model_decode(self, trg_seq, enc_output):
         trg_mask = generate_square_subsequent_mask(trg_seq.size(1)).to(trg_seq.device)
         trg_emb = self.model.trg_embedding_and_pos_encoding(trg_seq)
-        dec_output = self.model.transformer_part.decoder(trg_emb, enc_output, tgt_mask=trg_mask)
+        dec_output, dec_attn_list, enc_dec_attn_list = self.model.transformer_part.decoder(trg_emb, enc_output, tgt_mask=trg_mask, rtn_slf_attn=True, rtn_enc_dec_attn=True)
         seq_logit = torch.transpose(self.model.trg_word_prj(dec_output), 1, 0).contiguous()
-        return F.softmax(seq_logit, dim=-1)
+        return F.softmax(seq_logit, dim=-1), dec_attn_list, enc_dec_attn_list
     
 
     def _get_init_state(self, src_seq):
         beam_size = self.beam_size
 
         src_emb = self.model.src_embedding_and_pos_encoding(src_seq)
-        enc_output = self.model.transformer_part.encoder(src_emb)
-        dec_output = self._model_decode(self.init_seq, enc_output)
+        enc_output, enc_attn_list = self.model.transformer_part.encoder(src_emb)
+        dec_output, dec_attn_list, enc_dec_attn_list = self._model_decode(self.init_seq, enc_output)
         
         best_k_probs, best_k_idx = dec_output[:, -1, :].topk(beam_size)
 
         scores = torch.log(best_k_probs).view(beam_size)
         gen_seq = self.blank_seqs.clone().detach()
         gen_seq[:, 1] = best_k_idx[0]
-        enc_output = enc_output.repeat(beam_size, 1, 1)
-        return enc_output, gen_seq, scores
+        enc_output = enc_output.repeat(1, beam_size, 1)
+        return enc_output, gen_seq, scores, enc_attn_list, dec_attn_list, enc_dec_attn_list
 
 
     def _get_the_best_score_and_idx(self, gen_seq, dec_output, scores, step):
@@ -90,7 +90,7 @@ class Translator(nn.Module):
         return gen_seq, scores
 
 
-    def translate_sentence(self, src_seq):
+    def translate_sentence(self, src_seq, rtn_all_beam=False):
         # Only accept batch size equals to 1 in this function.
         # TODO: expand to batch operation.
         assert src_seq.size(0) == 1
@@ -99,13 +99,21 @@ class Translator(nn.Module):
         max_seq_len, beam_size, alpha = self.max_seq_len, self.beam_size, self.alpha 
 
         with torch.no_grad():
-            enc_output, gen_seq, scores = self._get_init_state(src_seq)
+            enc_output, gen_seq, scores, enc_attn_list, dec_attn_list, enc_dec_attn_list = self._get_init_state(src_seq)
+
+            all_dec_attn_list = []
+            all_enc_dec_attn_list = []
+            all_dec_attn_list.append(dec_attn_list)
+            all_enc_dec_attn_list.append(enc_dec_attn_list)
 
             ans_idx = 0   # default
 
             for step in range(2, max_seq_len):    # decode up to max length
-                dec_output = self._model_decode(gen_seq[:, :step], enc_output)
+                dec_output, dec_attn_list, enc_dec_attn_list = self._model_decode(gen_seq[:, :step], enc_output)
                 gen_seq, scores = self._get_the_best_score_and_idx(gen_seq, dec_output, scores, step)
+
+                all_dec_attn_list.append(dec_attn_list)
+                all_enc_dec_attn_list.append(enc_dec_attn_list)
 
                 # Check if all path finished
                 # -- locate the eos in the generated sequences
@@ -118,4 +126,12 @@ class Translator(nn.Module):
                     _, ans_idx = scores.div(seq_lens.float() ** alpha).max(0)
                     ans_idx = ans_idx.item()
                     break
-        return gen_seq[ans_idx][:seq_lens[ans_idx]].tolist()
+        if rtn_all_beam:
+            all_gen_seq = []
+            all_gen_seq.append(gen_seq[ans_idx][:seq_lens[ans_idx]].tolist())
+            for i in range(beam_size):
+                if i == ans_idx:
+                    continue
+                all_gen_seq.append(gen_seq[i][:seq_lens[i]].tolist())
+            return all_gen_seq, all_dec_attn_list, all_enc_dec_attn_list
+        return gen_seq[ans_idx][:seq_lens[ans_idx]].tolist(), all_dec_attn_list, all_enc_dec_attn_list
