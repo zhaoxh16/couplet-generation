@@ -21,7 +21,13 @@ def generate_square_subsequent_mask(sz):
 
 
 def generate_key_padding_mask(seq):
-    return seq == Constants.PAD
+    mask = (seq == Constants.PAD)
+    # mask = (
+    #     mask.float()
+    #     .masked_fill(mask == 0, float(0.0))
+    #     .masked_fill(mask == 1, float("-inf"))
+    # )
+    return mask
 
 
 class PositionalEncoding(nn.Module):
@@ -70,15 +76,9 @@ class Transformer(nn.Module):
     ):
         super().__init__()
 
-        self.src_word_emb = nn.Embedding(
-            n_src_vocab, d_model, padding_idx=Constants.PAD
-        )
         self.src_position_enc = PositionalEncoding(d_model)
         self.src_emb_dropout = nn.Dropout(p=dropout)
 
-        self.trg_word_emb = nn.Embedding(
-            n_trg_vocab, d_model, padding_idx=Constants.PAD
-        )
         self.trg_position_enc = PositionalEncoding(d_model)
         self.trg_emb_dropout = nn.Dropout(p=dropout)
 
@@ -94,6 +94,14 @@ class Transformer(nn.Module):
         self.trg_word_prj = nn.Linear(d_model, n_trg_vocab, bias=False)
 
         self._reset_parameters()
+
+        self.src_word_emb = nn.Embedding(
+            n_src_vocab, d_model, padding_idx=Constants.PAD
+        )
+        
+        self.trg_word_emb = nn.Embedding(
+            n_trg_vocab, d_model, padding_idx=Constants.PAD
+        )
 
     def _reset_parameters(self):
         for p in self.parameters():
@@ -141,6 +149,24 @@ class Transformer(nn.Module):
         trg_mask = generate_square_subsequent_mask(trg_enc_output.size(0)).to(
             trg_enc_output.device
         )
+
+        # print(src_seq)
+        # print(src_seq.size())
+        # print(trg_seq)
+        # print(trg_seq.size())
+        # print(src_key_padding_mask)
+        # print(src_key_padding_mask.size())
+        # print(memory_padding_mask)
+        # print(memory_padding_mask.size())
+        # print(trg_key_padding_mask)
+        # print(trg_key_padding_mask.size())
+        # print(src_enc_output)
+        # print(src_enc_output.size())
+        # print(trg_enc_output)
+        # print(trg_enc_output.size())
+        # print(trg_mask)
+        # print(trg_mask.size())
+        # exit()
 
         (
             transformer_part_output,

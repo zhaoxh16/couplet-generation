@@ -13,7 +13,7 @@ from tqdm import tqdm
 from transformer import Transformer
 from optimizer import ScheduledOptim
 from torch.optim import Adam
-from dataset import TranslationDataset, paired_collate_fn, collate_fn
+from dataset import TranslationDataset, paired_collate_fn
 
 
 def prepare_dataloaders(data, opt):
@@ -47,16 +47,20 @@ def prepare_dataloaders(data, opt):
     src_vocab_size = train_loader.dataset.src_vocab_size
     trg_vocab_size = train_loader.dataset.tgt_vocab_size
 
-    return train_loader, valid_loader, src_vocab_size, trg_vocab_size
+    src_idx2word = {idx:word for word, idx in data['dict']['src'].items()}
+    trg_idx2word = {idx:word for word, idx in data['dict']['tgt'].items()}
+
+    return train_loader, valid_loader, src_vocab_size, trg_vocab_size, src_idx2word, trg_idx2word
 
 
-def cal_performance(pred, gold, trg_pad_idx, smoothing=False):
+def cal_performance(pred, gold, trg_pad_idx, src_idx2word, trg_idx2word, smoothing=False):
     """ Apply label smoothing if needed """
 
     loss = cal_loss(pred, gold, trg_pad_idx, smoothing=smoothing)
 
     pred = pred.max(1)[1]
     gold = gold.contiguous().view(-1)
+    print([trg_idx2word.get(int(idx), Constants.UNK_WORD) for idx in pred[:8]], [trg_idx2word.get(int(idx), Constants.UNK_WORD) for idx in gold[:8]])
     non_pad_mask = gold.ne(trg_pad_idx)
     n_correct = pred.eq(gold).masked_select(non_pad_mask).sum().item()
     n_word = non_pad_mask.sum().item()
@@ -85,17 +89,14 @@ def cal_loss(pred, gold, trg_pad_idx, smoothing=False):
     return loss
 
 
-def train_epoch(model, training_data, optimizer, device, smoothing=True):
+def train_epoch(model, training_data, optimizer, device, src_idx2word, trg_idx2word, smoothing=True):
     model.train()
     total_loss, n_word_total, n_word_correct = 0, 0, 0
 
     desc = "  - (Training)   "
     for batch in tqdm(training_data, mininterval=2, desc=desc, leave=False):
         # prepare data
-        src_seq, trg_seq = map(lambda x: x.to(device), batch)
-        gold = trg_seq[:, 1:]
-        trg_seq = trg_seq[:, :-1]
-        # trg_mask = generate_square_subsequent_mask(trg_seq.size(1)).to(device)
+        src_seq, trg_seq, gold = map(lambda x: x.to(device), batch)
 
         # forward
         optimizer.zero_grad()
@@ -103,7 +104,7 @@ def train_epoch(model, training_data, optimizer, device, smoothing=True):
 
         # backward and update parameters
         loss, n_correct, n_word = cal_performance(
-            pred, gold, Constants.PAD, smoothing=smoothing
+            pred, gold, Constants.PAD, src_idx2word, trg_idx2word, smoothing=smoothing
         )
         loss.backward()
         optimizer.step_and_update_lr()
@@ -118,7 +119,7 @@ def train_epoch(model, training_data, optimizer, device, smoothing=True):
     return loss_per_word, accuracy
 
 
-def eval_epoch(model, validation_data, device):
+def eval_epoch(model, validation_data, device, src_idx2word, trg_idx2word):
     model.eval()
     total_loss, n_word_total, n_word_correct = 0, 0, 0
 
@@ -126,17 +127,14 @@ def eval_epoch(model, validation_data, device):
     with torch.no_grad():
         for batch in tqdm(validation_data, mininterval=2, desc=desc, leave=False):
             # prepare data
-            src_seq, trg_seq = map(lambda x: x.to(device), batch)
-            gold = trg_seq[:, 1:]
-            trg_seq = trg_seq[:, :-1]
-            # trg_mask = generate_square_subsequent_mask(trg_seq.size(1)).to(device)
+            src_seq, trg_seq, gold = map(lambda x: x.to(device), batch)
 
             # forward
             pred, enc_attn_list, dec_attn_list, enc_dec_attn_list = model(
                 src_seq, trg_seq
             )
             loss, n_correct, n_word = cal_performance(
-                pred, gold, Constants.PAD, smoothing=False
+                pred, gold, Constants.PAD, src_idx2word, trg_idx2word, smoothing=False
             )
 
             # note keeping
@@ -149,7 +147,7 @@ def eval_epoch(model, validation_data, device):
     return loss_per_word, accuracy
 
 
-def train(model, training_data, validation_data, optimizer, device, opt):
+def train(model, training_data, validation_data, optimizer, device, opt, src_idx2word, trg_idx2word):
     def print_performances(header, loss, accu, start_time):
         print(
             "  - {header:12} ppl: {ppl: 8.5f}, accuracy: {accu:3.3f} %, "
@@ -167,12 +165,12 @@ def train(model, training_data, validation_data, optimizer, device, opt):
 
         start = time.time()
         train_loss, train_accu = train_epoch(
-            model, training_data, optimizer, device, smoothing=opt.label_smoothing
+            model, training_data, optimizer, device, src_idx2word, trg_idx2word, smoothing=opt.label_smoothing
         )
         print_performances("Training", train_loss, train_accu, start)
 
         start = time.time()
-        valid_loss, valid_accu = eval_epoch(model, validation_data, device)
+        valid_loss, valid_accu = eval_epoch(model, validation_data, device, src_idx2word, trg_idx2word)
         print_performances("Validation", valid_loss, valid_accu, start)
 
         valid_losses += [valid_loss]
@@ -245,6 +243,8 @@ def main():
         validation_data,
         src_vocab_size,
         trg_vocab_size,
+        src_idx2word,
+        trg_idx2word
     ) = prepare_dataloaders(data, opt)
     opt.src_vocab_size = src_vocab_size  # for save
     opt.trg_vocab_size = trg_vocab_size  # for save
@@ -268,7 +268,7 @@ def main():
         opt.n_warmup_steps,
     )
 
-    train(transformer, training_data, validation_data, optimizer, device, opt)
+    train(transformer, training_data, validation_data, optimizer, device, opt, src_idx2word, trg_idx2word)
 
 
 if __name__ == "__main__":

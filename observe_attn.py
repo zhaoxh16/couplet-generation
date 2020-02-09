@@ -80,7 +80,7 @@ def annotate_heatmap(im, data=None, valfmt="{x:.2f}",
 
 # %%
 # enc-dec attention
-with open("test_2/enc_dec_attn_list.pkl", 'rb') as f:
+with open("test/enc_dec_attn_list.pkl", 'rb') as f:
     attn = pickle.load(f)
 
 attn_numpy = [[tensor.detach().cpu().numpy() for tensor in tensors] for tensors in attn]

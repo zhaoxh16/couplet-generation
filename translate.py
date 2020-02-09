@@ -8,7 +8,7 @@ import dill as pickle
 
 from transformer import Transformer
 from translator import Translator
-from dataset import TranslationDataset, collate_fn
+from dataset import TranslationDataset
 from tqdm import tqdm
 
 

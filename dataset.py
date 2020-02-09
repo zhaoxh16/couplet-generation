@@ -9,22 +9,36 @@ import constants as Constants
 def paired_collate_fn(insts):
     random.shuffle(insts)
     src_insts, tgt_insts = list(zip(*insts))
-    src_insts = collate_fn(src_insts)
-    tgt_insts = collate_fn(tgt_insts)
-    return (src_insts, tgt_insts)
+    src_insts = collate_fn_src(src_insts)
+    gold_insts = collate_fn_gold(tgt_insts)
+    tgt_insts = collate_fn_trg(tgt_insts)
+    return (src_insts, tgt_insts, gold_insts)
 
 
-def collate_fn(insts):
-    ''' Pad the instance to the max seq length in batch '''
-
+def collate_fn_src(insts):
     max_len = max(len(inst) for inst in insts)
-
     batch_seq = np.array([
         inst + [Constants.PAD] * (max_len - len(inst))
         for inst in insts])
-
     batch_seq = torch.LongTensor(batch_seq)
+    return batch_seq
 
+
+def collate_fn_trg(insts):
+    max_len = max(len(inst) for inst in insts)
+    batch_seq = np.array([
+        inst[:-1] + [Constants.PAD] * (max_len - len(inst))
+        for inst in insts])
+    batch_seq = torch.LongTensor(batch_seq)
+    return batch_seq
+
+
+def collate_fn_gold(insts):
+    max_len = max(len(inst) for inst in insts)
+    batch_seq = np.array([
+        inst[1:] + [Constants.PAD] * (max_len - len(inst))
+        for inst in insts])
+    batch_seq = torch.LongTensor(batch_seq)
     return batch_seq
 
 
